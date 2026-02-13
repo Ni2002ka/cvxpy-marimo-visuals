@@ -3,7 +3,7 @@ Here, you can find some interactive demos for HW problems as well as some additi
 
 ## HW4
 - [A20.10: Energy storage trade-offs](https://ni2002ka.github.io/cvxpy-marimo-visuals/A20_10/)
-- [A20.10 dual analysis](https://ni2002ka.github.io/cvxpy-marimo-visuals/A20_10/)
+- [A20.10 dual analysis](https://ni2002ka.github.io/cvxpy-marimo-visuals/A20_10_duals/)
 
 
 ## HW5
