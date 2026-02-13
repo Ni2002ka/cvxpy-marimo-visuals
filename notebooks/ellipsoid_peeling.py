@@ -20,8 +20,8 @@ async def _():
         import micropip
         await micropip.install("wigglystuff")
         
-        import pyodide
-        await pyodide.loadPackage("clarabel")  # make clarabel available in-browser
+        import pyodide_js
+        await pyodide_js.loadPackage("clarabel")  # make clarabel available in-browser
         import clarabel
 
     from wigglystuff import ChartPuck
