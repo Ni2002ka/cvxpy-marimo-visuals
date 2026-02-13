@@ -33,10 +33,38 @@ jobs:
           python -m pip install --upgrade pip
           pip install marimo
 
-      - name: 📄 Export notebook
+      - name: 📄 Export notebooks
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p site
-          marimo export html-wasm notebook.py -o site --mode run
+      
+          # Find notebooks under notebooks/ (only .py files)
+          mapfile -t NOTEBOOKS < <(find notebooks -maxdepth 1 -type f -name "*.py" | sort)
+      
+          if [ ${#NOTEBOOKS[@]} -eq 0 ]; then
+            echo "No notebooks found in notebooks/"
+            exit 1
+          fi
+      
+          # Export each notebook to its own subfolder
+          for nb in "${NOTEBOOKS[@]}"; do
+            name="$(basename "${nb%.py}")"
+            out="site/$name"
+            marimo export html-wasm "$nb" -o "$out" --mode run
+          done
+      
+          # Create an index.html linking to each notebook
+          {
+            echo '<!doctype html><html><head><meta charset="utf-8"><title>Notebooks</title></head><body>'
+            echo '<h1>Notebooks</h1><ul>'
+            for nb in "${NOTEBOOKS[@]}"; do
+              name="$(basename "${nb%.py}")"
+              echo "<li><a href=\"${name}/\">${name}</a></li>"
+            done
+            echo '</ul></body></html>'
+          } > site/index.html
+
 
       - name: 📦 Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
