@@ -2,7 +2,9 @@
 Here, you can find some interactive demos for HW problems as well as some additional demos aiming to show relations between primal/dual problems and provide intuition. Feel free to email requests/ideas for new demos to nzahedi@stanford.edu.
 
 ## HW4
-Coming soon 
+- [A5.1: Numerical perturbation analysis](https://ni2002ka.github.io/cvxpy-marimo-visuals/A5.1/)
+- [A20.10: Energy storage trade-offs](https://ni2002ka.github.io/cvxpy-marimo-visuals/A20_10/)
+- [A20.10 dual analysis](https://ni2002ka.github.io/cvxpy-marimo-visuals/A20_10/)
 
 
 ## HW5
