@@ -11,22 +11,19 @@ app = marimo.App(width="full")
 async def _():
     import marimo as mo
     import numpy as np
+    import cvxpy as cp
     import pandas as pd
     import matplotlib.pyplot as plt
 
     import sys
     if sys.platform == "emscripten":
         import micropip
-        await micropip.install(
-            "cvxpy",
-            deps=False  # Skip automatic dependency resolution
-        )
         await micropip.install("wigglystuff")
         
         import pyodide_js
         await pyodide_js.loadPackage("clarabel")  # make clarabel available in-browser
+        import clarabel
 
-    import cvxpy as cp
     from wigglystuff import ChartPuck
     return ChartPuck, cp, mo, np
 
@@ -52,48 +49,61 @@ def _(mo):
 def _(ChartPuck, cp, mo, np):
     n = 5
 
+    # --- Build problem ONCE ---
+    positions_param = cp.Parameter((n, 2))
+    A = cp.Variable((2, 2), PSD=True)
+    b = cp.Variable(2)
+
+    cons = [cp.norm2(A @ positions_param[j, :] + b) <= 1 for j in range(n)]
+    prob = cp.Problem(cp.Maximize(cp.log_det(A)), cons)
+
+    # Cache last successful solution so we can still draw if solve fails
+    last = {"A": None, "b": None}
 
     def draw_func(ax, widget):
-        positions = np.array([[widget.x[i], widget.y[i]] for i in range(n)])
-        A = cp.Variable((2, 2), PSD=True)
-        b = cp.Variable(2)
+        positions = np.array([[widget.x[i], widget.y[i]] for i in range(n)], dtype=float)
 
-        cons = []
-        for j in range(n):
-            cons += [cp.norm2(A @ positions[j] + b) <= 1]
+        positions_param.value = positions
 
-        prob = cp.Problem(cp.Maximize(cp.log_det(A)), cons)
-        prob.solve(solver=cp.CLARABEL, max_iter=50)
+        try:
+            prob.solve(
+                solver=cp.CLARABEL,
+                warm_start=True,     # <-- important
+                max_iter=30,         # lower in WASM to keep UI responsive
+                verbose=False,
+            )
+        except Exception:
+            pass
 
-
-        Ahat = A.value
-        bhat = b.value
+        Ahat = A.value if A.value is not None else last["A"]
+        bhat = b.value if b.value is not None else last["b"]
 
         if Ahat is None or bhat is None:
-            raise ValueError("No values set for A or b")
+            # If first solve hasn't succeeded yet, just draw points and return
+            ax.scatter(positions[:, 0], positions[:, 1], s=20, label="points")
+            ax.set_xlim(-4, 4); ax.set_ylim(-4, 4)
+            ax.grid(True, alpha=0.3)
+            return
+
+        last["A"], last["b"] = Ahat, bhat
 
         # parameterize boundary
         theta = np.linspace(0, 2*np.pi, 400)
-        U = np.vstack([np.cos(theta), np.sin(theta)])          # Pick points on unit circle
-        X = np.linalg.solve(Ahat, U - bhat.reshape(2,1))       # Find pre-image of points
-
+        U = np.vstack([np.cos(theta), np.sin(theta)])
+        X = np.linalg.solve(Ahat, U - bhat.reshape(2, 1))
 
         ax.scatter(positions[:, 0], positions[:, 1], s=20, label="points")
         ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
 
-        # Duals calculation
-        lambdas = np.array([c.dual_value for c in cons], dtype=float)  # shape (n,)
+        # Duals
+        lambdas = np.array([c.dual_value for c in cons], dtype=float)
         lambdas = np.maximum(lambdas, 0.0)
 
         Y = (Ahat @ positions.T + bhat.reshape(2, 1))
         Ynorm = np.linalg.norm(Y, axis=0) + 1e-12
         N = (Ahat.T @ (Y / Ynorm))
 
-        if np.max(lambdas) > 0:
-            lam_scaled = lambdas / np.max(lambdas)
-        else:
-            lam_scaled = lambdas
-
+        lam_scaled = lambdas / np.max(lambdas) if np.max(lambdas) > 0 else lambdas
         base = 2.0
         Ux = -N[0, :] * (base * lam_scaled)
         Uy = -N[1, :] * (base * lam_scaled)
@@ -121,7 +131,7 @@ def _(ChartPuck, cp, mo, np):
         x=[-1.5] + [0] * (n-2) + [1.5],
         y=[0] + [1.5] * (n-1),
         puck_color="red",
-        throttle=100
+        throttle=250,   # <-- bump this in WASM; 100ms is still too chatty
     )
 
     multi_widget = mo.ui.anywidget(multi_puck)
