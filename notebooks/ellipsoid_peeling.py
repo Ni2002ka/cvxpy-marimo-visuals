@@ -149,8 +149,6 @@ def _(cp, multi_puck, multi_widget, n, np, solve_btn, state):
     prob.solve(
         solver=cp.CLARABEL,
         max_iter=200,
-        tol_feas=1e-3,
-        tol_gap=1e-3,
         verbose=False,
     )
 
