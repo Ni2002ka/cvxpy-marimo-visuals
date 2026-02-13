@@ -70,7 +70,7 @@ def _(ChartPuck, cp, mo, np):
                 solver=cp.CLARABEL,
                 warm_start=True,     # <-- important
                 max_iter=30,         # lower in WASM to keep UI responsive
-                verbose=False,
+                verbose=True,
             )
         except Exception:
             pass
