@@ -112,7 +112,7 @@ def _(cons, cp, np, plt, u):
            plt.ylabel(r"$\|u_t\|_2$")
         plt.grid()
     plt.tight_layout()
-    fig
+    fig 
     return
 
 
