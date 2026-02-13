@@ -8,7 +8,7 @@ Here, you can find some interactive demos for HW problems as well as some additi
 
 ## HW5
 - [A16.11: Control with various objectives](https://ni2002ka.github.io/cvxpy-marimo-visuals/A16-11/)
-- [A20.10: Huber loss](https://ni2002ka.github.io/cvxpy-marimo-visuals/A16-11_huber/)
+- [A16.11: Huber loss](https://ni2002ka.github.io/cvxpy-marimo-visuals/A16-11_huber/) An additional demo showing how the $M$ parameter of the Huber loss affects the optimal control inputs
 
 
 ## Additional Primal/Dual Visualizations
