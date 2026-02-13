@@ -52,16 +52,17 @@ def _(ChartPuck, cp, mo, np):
 
     def draw_func(ax, widget):
         ax.set_title("hello")
-        multi_puck = ChartPuck.from_callback(
-            draw_fn=draw_func,
-            figsize=(8, 8),
-            x_bounds=(-4, 4),
-            y_bounds=(-4, 4),
-            x=[-1.5] + [0] * (n-2) + [1.5],
-            y=[0] + [1.5] * (n-1),
-            puck_color="red",
-            throttle=100
-        )
+        
+    multi_puck = ChartPuck.from_callback(
+        draw_fn=draw_func,
+        figsize=(8, 8),
+        x_bounds=(-4, 4),
+        y_bounds=(-4, 4),
+        x=[-1.5] + [0] * (n-2) + [1.5],
+        y=[0] + [1.5] * (n-1),
+        puck_color="red",
+        throttle=100
+    )
 
     multi_widget = mo.ui.anywidget(multi_puck)
     return (multi_widget,)
