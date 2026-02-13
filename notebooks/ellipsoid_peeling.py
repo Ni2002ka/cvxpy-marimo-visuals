@@ -25,7 +25,6 @@ async def _():
         import clarabel
 
     from wigglystuff import ChartPuck
-    print("Installed solvers:", cp.installed_solvers())
     return ChartPuck, cp, mo, np
 
 
@@ -48,7 +47,7 @@ def _(mo):
 
 @app.cell
 def _(ChartPuck, cp, mo, np):
-    n = 7
+    n = 5
 
 
     def draw_func(ax, widget):
@@ -61,7 +60,7 @@ def _(ChartPuck, cp, mo, np):
             cons += [cp.norm2(A @ positions[j] + b) <= 1]
 
         prob = cp.Problem(cp.Maximize(cp.log_det(A)), cons)
-        prob.solve(solver=cp.CLARABEL)
+        prob.solve(solver=cp.CLARABEL, max_iter=50)
 
 
         Ahat = A.value
