@@ -129,7 +129,7 @@ def _(ChartPuck, cp, mo, np):
         x_bounds=(-4, 4),
         y_bounds=(-4, 4),
         x=[-1.5] + [0] * (n-2) + [1.5],
-        y=[0] + [1.5] * (n-1),
+        y=[1.5] + [-1.5] * (n-2) + [1.5],
         puck_color="red",
         throttle=250,   # <-- bump this in WASM; 100ms is still too chatty
     )
