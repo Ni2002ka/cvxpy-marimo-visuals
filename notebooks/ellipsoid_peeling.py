@@ -14,6 +14,12 @@ def _():
     import cvxpy as cp
     import pandas as pd
     import matplotlib.pyplot as plt
+
+    import sys
+    if sys.platform == "emscripten":
+        import micropip
+        await micropip.install("wigglystuff")
+
     from wigglystuff import ChartPuck
     return ChartPuck, cp, mo, np
 
