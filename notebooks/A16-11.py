@@ -90,7 +90,7 @@ def _(cons, cp, np, plt, u):
            ]
 
     plt.rcParams['text.usetex'] = True
-    plt.figure(figsize=(15,5))
+    fig = plt.figure(figsize=(15,5))
     for i,(obj, label) in enumerate(objs):
         prob = cp.Problem(obj,cons)
         prob.solve()
@@ -112,7 +112,7 @@ def _(cons, cp, np, plt, u):
            plt.ylabel(r"$\|u_t\|_2$")
         plt.grid()
     plt.tight_layout()
-    plt.show()
+    fig
     return
 
 
