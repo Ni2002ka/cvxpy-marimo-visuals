@@ -19,7 +19,10 @@ async def _():
     if sys.platform == "emscripten":
         import micropip
         await micropip.install("wigglystuff")
-        await micropip.install("clarabel")
+        await micropip.install(
+            "https://files.pythonhosted.org/packages/py3/c/cvxopt/cvxopt-1.3.2-py3-none-any.whl",
+            deps=False
+        )
 
     from wigglystuff import ChartPuck
     return ChartPuck, cp, mo, np
@@ -57,7 +60,7 @@ def _(ChartPuck, cp, mo, np):
             cons += [cp.norm2(A @ positions[j] + b) <= 1]
 
         prob = cp.Problem(cp.Maximize(cp.log_det(A)), cons)
-        prob.solve(solver=cp.CLARABEL)
+        prob.solve(solver=cp.CVXOPT)
 
 
         Ahat = A.value
