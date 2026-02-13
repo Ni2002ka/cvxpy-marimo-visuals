@@ -82,37 +82,50 @@ def _(mo):
 
 @app.cell
 def _(cons, cp, np, plt, u):
-    objs = [
-           (cp.Minimize(cp.sum_squares(u))           , r"(a) $\|u\|_2^2$"),
-           (cp.Minimize(cp.sum(cp.norm(u,2,axis=0)))  , r"(b) $\sum\|u_t\|_2$"),
-           (cp.Minimize(cp.max(cp.norm(u,axis=0)))    , r"(c) $\max\|u_t\|_2$"),
-           (cp.Minimize(cp.sum(cp.norm(u,1,axis=0)))  , r"(d) $\sum\|u_t\|_1$"),
-           ]
+    import sys
+    import matplotlib as mpl
 
-    plt.rcParams['text.usetex'] = True
-    fig = plt.figure(figsize=(15,5))
-    for i,(obj, label) in enumerate(objs):
-        prob = cp.Problem(obj,cons)
+    # Emscripten (html-wasm) cannot run subprocess, so Matplotlib usetex will crash.
+    IS_WASM = (sys.platform == "emscripten")
+
+    # Use real LaTeX locally; fall back to mathtext on Pages.
+    mpl.rcParams["text.usetex"] = (not IS_WASM)
+
+    objs = [
+        (cp.Minimize(cp.sum_squares(u))              , r"(a) $\|u\|_2^2$"),
+        (cp.Minimize(cp.sum(cp.norm(u, 2, axis=0)))  , r"(b) $\sum\|u_t\|_2$"),
+        (cp.Minimize(cp.max(cp.norm(u, axis=0)))     , r"(c) $\max\|u_t\|_2$"),
+        (cp.Minimize(cp.sum(cp.norm(u, 1, axis=0)))  , r"(d) $\sum\|u_t\|_1$"),
+    ]
+
+    fig = plt.figure(figsize=(15, 5))
+
+    for i, (obj, label) in enumerate(objs):
+        prob = cp.Problem(obj, cons)
         prob.solve()
 
-        plt.subplot(2,4,i+1)
+        plt.subplot(2, 4, i + 1)
         plt.plot(u.value.T)
-
         if i == 0:
-           plt.ylabel("$u_t$")
+            plt.ylabel(r"$u_t$")
         plt.title(label)
         plt.grid()
         plt.xlabel("t")
+
         plt.subplot(2, 4, i + 5)
-        plt.xlabel("t")
-        plt.plot(np.linalg.norm(u.value,axis=0),c="black",label=r"$\|u\|_2$")
+        plt.plot(np.linalg.norm(u.value, axis=0), label=r"$\|u_t\|_2$")
         if i == 2:
-           plt.ylim(ymax = .12,ymin=0)
+            plt.ylim(ymax=0.12, ymin=0)
         if i == 0:
-           plt.ylabel(r"$\|u_t\|_2$")
+            plt.ylabel(r"$\|u_t\|_2$")
         plt.grid()
-    plt.tight_layout()
-    fig 
+        plt.xlabel("t")
+
+    # tight_layout triggers text measurement; it's fine locally but can be flaky in wasm
+    if not IS_WASM:
+        plt.tight_layout()
+
+    fig
     return
 
 
