@@ -19,7 +19,7 @@ async def _():
     if sys.platform == "emscripten":
         import micropip
         await micropip.install("wigglystuff")
-        await micropip.install("scs")
+        await micropip.install("clarabel")
 
     from wigglystuff import ChartPuck
     return ChartPuck, cp, mo, np
@@ -57,7 +57,7 @@ def _(ChartPuck, cp, mo, np):
             cons += [cp.norm2(A @ positions[j] + b) <= 1]
 
         prob = cp.Problem(cp.Maximize(cp.log_det(A)), cons)
-        prob.solve(solver=cp.SCS)
+        prob.solve(solver=cp.CLARABEL)
 
 
         Ahat = A.value
