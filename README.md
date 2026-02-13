@@ -1,2 +1,2 @@
-- [Ellipsoid Peeling](https://<user>.github.io/<repo>/ellipsoid_peeling/)
-- [Another Notebook](https://<user>.github.io/<repo>/another_notebook/)
+- [Ellipsoid Peeling](https://ni2002ka.github.io/cvxpy-marimo-visuals/ellipsoid_peeling/)
+- [Another Notebook](https://ni2002ka.github.io/cvxpy-marimo-visuals/hanging_beads/)
