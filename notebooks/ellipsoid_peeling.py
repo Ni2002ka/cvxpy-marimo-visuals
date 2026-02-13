@@ -8,7 +8,7 @@ app = marimo.App(width="full")
 
 
 @app.cell
-def _():
+async def _():
     import marimo as mo
     import numpy as np
     import cvxpy as cp
@@ -19,6 +19,7 @@ def _():
     if sys.platform == "emscripten":
         import micropip
         await micropip.install("wigglystuff")
+        await micropip.install("scs")
 
     from wigglystuff import ChartPuck
     return ChartPuck, cp, mo, np
@@ -56,7 +57,7 @@ def _(ChartPuck, cp, mo, np):
             cons += [cp.norm2(A @ positions[j] + b) <= 1]
 
         prob = cp.Problem(cp.Maximize(cp.log_det(A)), cons)
-        prob.solve()
+        prob.solve(solver=cp.SCS)
 
 
         Ahat = A.value
