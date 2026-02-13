@@ -17,7 +17,10 @@ async def _():
     import sys
     if sys.platform == "emscripten":
         import micropip
-        await micropip.install("cvxpy")
+        await micropip.install(
+            "cvxpy",
+            deps=False  # Skip automatic dependency resolution
+        )
         await micropip.install("wigglystuff")
         
         import pyodide_js
