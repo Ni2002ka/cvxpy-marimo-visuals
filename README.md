@@ -1,2 +1,2 @@
 - [Ellipsoid Peeling](https://ni2002ka.github.io/cvxpy-marimo-visuals/ellipsoid_peeling/)
-- [Another Notebook](https://ni2002ka.github.io/cvxpy-marimo-visuals/hanging_beads/)
+- [Hanging Beads](https://ni2002ka.github.io/cvxpy-marimo-visuals/hanging_beads/)
