@@ -12,7 +12,7 @@ async def _():
     import marimo as mo
     import numpy as np
     import cvxpy as cp
-    import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt  # noqa: F401
 
     import sys
     if sys.platform == "emscripten":
@@ -32,21 +32,14 @@ def _(mo):
     mo.md(r"""
     # Ellipsoid peeling using dual values
     ## Minimum volume ellipsoid around a set of points
-    * Ellipsoid parametarized as $\varepsilon=\{\nu \mid \|A\nu + b\|_2 \le 1\}$.
-    * Finite set of points $\{x_1, x_2, ..., x_m\}$.
-    * Volume is proportional to $\det(A^{-1})$.
-
-    $$
-    \min_{A,b}\ \log\det(A^{-1})
-    \quad \text{s.t.}\quad \|Ax_i+b\|_2 \le 1,\ i=1,\dots,m
-    $$
+    * Ellipsoid parameterized as $\varepsilon=\{\nu \mid \|A\nu + b\|_2 \le 1\}$.
+    * We solve (equivalently) $\min -\log\det(A)$ subject to $\|Ax_i+b\|_2 \le 1$.
     """)
     return
 
 
 @app.cell
 def _(mo):
-    # Button to trigger solving (prevents solve on initial widget construction)
     solve_btn = mo.ui.button(label="Solve ellipsoid")
     solve_btn
     return solve_btn
@@ -56,13 +49,8 @@ def _(mo):
 def _(ChartPuck, mo, np):
     n = 5
 
-    # Shared cache for solution + duals (draw_func reads from this)
-    state = {
-        "Ahat": None,
-        "bhat": None,
-        "lambdas": None,
-        "last_positions": None,
-    }
+    # Cache for solution + duals (draw_func reads this, solve cell writes it)
+    state = {"Ahat": None, "bhat": None, "lambdas": None}
 
     def draw_func(ax, widget):
         positions = np.array([[widget.x[i], widget.y[i]] for i in range(n)], dtype=float)
@@ -74,26 +62,21 @@ def _(ChartPuck, mo, np):
         bhat = state["bhat"]
         lambdas = state["lambdas"]
 
-        # Only draw ellipsoid/duals if we have a cached solve
-        # AND it corresponds to the current positions (optional but avoids confusion).
-        if Ahat is not None and bhat is not None and lambdas is not None:
-            last = state["last_positions"]
-            if last is not None and last.shape == positions.shape and np.allclose(last, positions):
-                theta = np.linspace(0, 2*np.pi, 400)
-                U = np.vstack([np.cos(theta), np.sin(theta)])
-                X = np.linalg.solve(Ahat, U - bhat.reshape(2, 1))
-                ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
+        # Only draw ellipsoid/duals if we have a cached solution
+        if Ahat is not None and bhat is not None:
+            theta = np.linspace(0, 2*np.pi, 400)
+            U = np.vstack([np.cos(theta), np.sin(theta)])
+            X = np.linalg.solve(Ahat, U - bhat.reshape(2, 1))
+            ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
 
-                # Dual “normal forces”
+            if lambdas is not None:
+                lambdas = np.maximum(np.asarray(lambdas, dtype=float), 0.0)
+
                 Y = (Ahat @ positions.T + bhat.reshape(2, 1))
                 Ynorm = np.linalg.norm(Y, axis=0) + 1e-12
                 N = (Ahat.T @ (Y / Ynorm))
 
-                if np.max(lambdas) > 0:
-                    lam_scaled = lambdas / np.max(lambdas)
-                else:
-                    lam_scaled = lambdas
-
+                lam_scaled = lambdas / np.max(lambdas) if np.max(lambdas) > 0 else lambdas
                 base = 2.0
                 Ux = -N[0, :] * (base * lam_scaled)
                 Uy = -N[1, :] * (base * lam_scaled)
@@ -105,13 +88,12 @@ def _(ChartPuck, mo, np):
                     width=0.006, alpha=0.9,
                     label="dual normal force (scaled)"
                 )
-            else:
-                ax.set_title("Drag points, then click 'Solve ellipsoid'")
 
         ax.set_xlim(-4, 4)
         ax.set_ylim(-4, 4)
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
+        ax.set_title("Drag points; click Solve to update")
         ax.grid(True, alpha=0.3)
         ax.legend(loc="upper right")
 
@@ -142,31 +124,23 @@ def _(cp, multi_puck, multi_widget, n, np, solve_btn, state):
 
     cons = [cp.norm2(A @ positions[j] + b) <= 1 for j in range(n)]
 
-    # For this parameterization, minimize -log_det(A) (volume of A^{-1})
-    eps = 1e-3
+    # For {x : ||A x + b|| <= 1}, volume ∝ det(A^{-1}), so minimize -log_det(A).
+    # Small trace regularizer helps Clarabel converge in-browser.
+    eps = 1e-2
     prob = cp.Problem(cp.Minimize(-cp.log_det(A) + eps * cp.trace(A)), cons)
 
-    prob.solve(
-        solver=cp.CLARABEL,
-        max_iter=200,
-        verbose=False,
-    )
+    prob.solve(solver=cp.CLARABEL, max_iter=200, verbose=False)
 
     Ahat = A.value
     bhat = b.value
-
     if Ahat is None or bhat is None:
         raise ValueError(f"Solve failed: status={prob.status}")
 
-    # Duals: one per constraint
     lambdas = np.array([c.dual_value for c in cons], dtype=float)
-    lambdas = np.maximum(lambdas, 0.0)
 
-    # Cache results for draw_func
     state["Ahat"] = Ahat
     state["bhat"] = bhat
     state["lambdas"] = lambdas
-    state["last_positions"] = positions
 
     # Force redraw so ellipsoid appears
     multi_puck.redraw()
@@ -183,9 +157,8 @@ def _(multi_widget):
 def _(mo):
     mo.md(r"""
     ## Observations:
-    * Dual corresponding to each point demonstrates how much the volume of the ellipsoid would change if we removed that point.
-    * If the ellipsoid were an elastic membrane, we can think of this as a "normal force" acting on each point.
-    * Points not touching the boundary have zero "force" (their dual is ~0 by complementary slackness).
+    * Points not touching the boundary have dual ~0 (complementary slackness).
+    * Interpreting the duals as “normal forces” gives intuition for which points are active.
     """)
     return
 
