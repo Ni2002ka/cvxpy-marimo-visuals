@@ -1,5 +1,5 @@
-# marimo notebook: ellipsoid peeling (server-solved)
-# Run:  marimo run app.py
+# marimo notebook: ellipsoid peeling (server-solved, debounced + latest-wins)
+# Run: marimo run app.py
 
 import marimo
 
@@ -27,13 +27,8 @@ async def _():
 @app.cell
 def _(mo):
     mo.md(r"""
-    # Ellipsoid peeling using dual values
-    ## Minimum volume ellipsoid around a set of points
-    * Ellipsoid parametarized as $\varepsilon=\{\nu \mid \|A\nu + b\|_2 \le 1\}$.
-    * Finite set of points $\{x_1, x_2, ..., x_m\}$.
-    * Volume is proportional to $\det A^{-1}$.
-
-    Server runs CVXPY+Clarabel and returns $(A,b)$ and duals; browser just renders.
+    # Ellipsoid peeling using dual values (server-solved)
+    Smoother UX: debounce solves + discard stale responses.
     """)
     return
 
@@ -46,7 +41,11 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
 
     n = 5
 
-    # ---- request helper ----
+    # --------- tuning knobs ----------
+    DEBOUNCE_SECONDS = 0.45     # only solve after user stops moving for this long
+    MIN_GAP_SECONDS = 0.20      # never solve more frequently than this
+    # --------------------------------
+
     async def post_positions(url: str, positions: np.ndarray):
         payload = {"positions": positions.tolist(), "max_iter": 50}
 
@@ -64,27 +63,47 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
             r = requests.post(url, json=payload, timeout=15)
             return r.json()
 
-    # ---- cache ----
+    def schedule(coro):
+        try:
+            asyncio.get_running_loop().create_task(coro)
+            return True
+        except RuntimeError:
+            try:
+                asyncio.get_event_loop().create_task(coro)
+                return True
+            except Exception:
+                return False
+
     cache = {
-        "A": None,               # np.array (2,2)
-        "b": None,               # np.array (2,)
-        "lambdas": None,         # np.array (n,)
-        "positions_used": None,  # np.array (n,2) positions used to produce A,b,lambdas
-        "in_flight": False,
-        "last_req_t": 0.0,
+        "A": None,
+        "b": None,
+        "lambdas": None,
+        "positions_used": None,
+
         "last_error": None,
+
+        # debounce state
+        "last_positions": None,
+        "last_move_t": 0.0,
+        "last_solve_start_t": 0.0,
+
+        # latest-wins state
+        "in_flight": False,
+        "req_id": 0,          # increment for each request
+        "latest_req_id": 0,   # id of latest request we care about
+
         "last_ok_t": None,
-        "last_sent_t": None,
     }
 
-    # Debounce for server calls
-    MIN_SECONDS_BETWEEN_SOLVES = 0.35
-
-    async def request_solve(positions: np.ndarray):
+    async def request_solve(positions: np.ndarray, req_id: int):
         cache["in_flight"] = True
-        cache["last_sent_t"] = time.monotonic()
         try:
             data = await post_positions(SOLVE_URL, positions)
+
+            # Discard stale responses
+            if req_id != cache["latest_req_id"]:
+                return
+
             if data.get("ok"):
                 cache["A"] = np.array(data["A"], dtype=float)
                 cache["b"] = np.array(data["b"], dtype=float)
@@ -97,71 +116,65 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
         except Exception as e:
             cache["last_error"] = f"{type(e).__name__}: {e}"
         finally:
-            cache["in_flight"] = False
+            # Only clear in_flight if we're still the latest request
+            if req_id == cache["latest_req_id"]:
+                cache["in_flight"] = False
 
-    def schedule(coro):
-        """
-        Robust task scheduling across:
-        - Pyodide (running loop)
-        - marimo run (running loop)
-        - edge cases (no running loop) -> queue onto loop if available
-        """
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(coro)
-            return True
-        except RuntimeError:
-            try:
-                loop = asyncio.get_event_loop()
-                loop.create_task(coro)
-                return True
-            except Exception:
-                return False
-
-    def maybe_schedule_solve(positions: np.ndarray):
+    def maybe_debounced_solve(P_now: np.ndarray):
         now = time.monotonic()
 
-        # If we have never solved successfully, be more aggressive
-        min_gap = 0.05 if cache["A"] is None else MIN_SECONDS_BETWEEN_SOLVES
+        # track movement (treat as moved if any coordinate changed)
+        if cache["last_positions"] is None:
+            cache["last_positions"] = P_now.copy()
+            cache["last_move_t"] = now
+        else:
+            if np.max(np.abs(cache["last_positions"] - P_now)) > 1e-6:
+                cache["last_positions"] = P_now.copy()
+                cache["last_move_t"] = now
 
-        if cache["in_flight"]:
-            return
-        if now - cache["last_req_t"] < min_gap:
+        # wait until user pauses
+        paused_long_enough = (now - cache["last_move_t"]) >= DEBOUNCE_SECONDS
+        if not paused_long_enough:
             return
 
-        cache["last_req_t"] = now
-        ok = schedule(request_solve(positions))
-        if not ok:
-            cache["last_error"] = "Could not schedule async task (no event loop)"
+        # throttle
+        if now - cache["last_solve_start_t"] < MIN_GAP_SECONDS:
+            return
+
+        # start a new request (latest-wins)
+        cache["last_solve_start_t"] = now
+        cache["req_id"] += 1
+        cache["latest_req_id"] = cache["req_id"]
+        cache["in_flight"] = True
+        schedule(request_solve(P_now.copy(), cache["latest_req_id"]))
 
     def draw_func(ax, widget):
-        # current UI positions
         P_now = np.array([[widget.x[i], widget.y[i]] for i in range(n)], dtype=float)
 
-        # kick a server solve periodically (debounced)
-        maybe_schedule_solve(P_now)
+        # debounce scheduling (solve only when user pauses)
+        maybe_debounced_solve(P_now)
 
         # draw current points always
         ax.scatter(P_now[:, 0], P_now[:, 1], s=200, label="points")
 
+        # draw last solved ellipse (may be stale while dragging)
         Ahat = cache["A"]
         bhat = cache["b"]
         lambdas = cache["lambdas"]
         P_used = cache["positions_used"]
 
-        # IMPORTANT: draw ellipse/arrows using P_used so they are consistent with the solve,
-        # even if user is dragging and results are slightly stale.
         if Ahat is not None and bhat is not None and P_used is not None:
-            theta = np.linspace(0, 2 * np.pi, 400)
+            theta = np.linspace(0, 2*np.pi, 400)
             U = np.vstack([np.cos(theta), np.sin(theta)])
             try:
                 X = np.linalg.solve(Ahat, U - bhat.reshape(2, 1))
-                ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
+                ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary (last solve)")
             except np.linalg.LinAlgError:
-                cache["last_error"] = "LinAlgError: singular A from server?"
+                pass
 
             if lambdas is not None and len(lambdas) == n:
                 lamb = np.maximum(lambdas, 0.0)
+
                 Y = (Ahat @ P_used.T + bhat.reshape(2, 1))
                 Ynorm = np.linalg.norm(Y, axis=0) + 1e-12
                 N = (Ahat.T @ (Y / Ynorm))
@@ -176,20 +189,20 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
                     Ux, Uy,
                     angles="xy", scale_units="xy", scale=1,
                     width=0.006, alpha=0.9,
-                    label="dual normal force (scaled)",
+                    label="dual normal force (last solve)",
                 )
 
-        # status/debug text
-        status = []
+        # status line
+        msg = []
         if cache["in_flight"]:
-            status.append("solving...")
+            msg.append("solving (server)…")
         else:
-            status.append("idle")
-        if cache["last_ok_t"] is not None:
-            status.append(f"last ok: {time.monotonic() - cache['last_ok_t']:.2f}s ago")
+            msg.append("idle")
+        if cache["last_ok_t"] is None:
+            msg.append("no solve yet")
         else:
-            status.append("no successful solve yet")
-        ax.text(-3.8, 3.65, " | ".join(status), fontsize=9)
+            msg.append(f"last solve {time.monotonic() - cache['last_ok_t']:.1f}s ago")
+        ax.text(-3.8, 3.65, " | ".join(msg), fontsize=9)
 
         if cache["last_error"]:
             ax.text(-3.8, 3.40, f"solve error: {cache['last_error']}", fontsize=8)
@@ -198,10 +211,10 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
         ax.set_ylim(-4, 4)
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
-        ax.set_title("Drag points to move them (server-solved)")
+        ax.set_title("Drag points to move them (server-solved, debounced)")
         ax.grid(True, alpha=0.3)
 
-    # Good init (non-degenerate)
+    # init points
     x0 = [-1.5, 1.5, 0.0, 0.0, 0.6]
     y0 = [ 1.5, 1.5, 0.0,-1.5,-0.2]
 
@@ -213,12 +226,15 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
         x=x0,
         y=y0,
         puck_color="red",
-        throttle=60,
+        throttle=30,  # redraw for smooth dragging; solve is debounced anyway
     )
 
-    # Force an initial solve ASAP so it renders even before you drag
+    # kick one initial solve
     P0 = np.array(list(zip(x0, y0)), dtype=float)
-    schedule(request_solve(P0))
+    cache["req_id"] += 1
+    cache["latest_req_id"] = cache["req_id"]
+    cache["in_flight"] = True
+    schedule(request_solve(P0, cache["latest_req_id"]))
 
     multi_widget = mo.ui.anywidget(multi_puck)
     return (multi_widget,)
@@ -227,16 +243,6 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
 @app.cell
 def _(multi_widget):
     multi_widget
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## Notes
-    * Ellipse + arrows may lag slightly while dragging because solves are server-side.
-    * They are always drawn consistently for the *positions used by the most recent solve*.
-    """)
     return
 
 
