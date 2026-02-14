@@ -11,8 +11,6 @@ app = marimo.App(width="full")
 async def _():
     import marimo as mo
     import numpy as np
-    import cvxpy as cp
-    import pandas as pd
     import matplotlib.pyplot as plt
 
     import sys
@@ -21,9 +19,9 @@ async def _():
         await micropip.install("wigglystuff")
 
     from wigglystuff import ChartPuck
-    SOLVE_URL = "https://cvxpy-marimo-visuals.onrender.com/solve"
-    return ChartPuck, cp, mo, np
 
+    SOLVE_URL = "https://cvxpy-marimo-visuals.onrender.com/solve"
+    return ChartPuck, SOLVE_URL, mo, np
 
 
 @app.cell
@@ -44,81 +42,121 @@ def _(mo):
 
 
 @app.cell
-def _(ChartPuck, cp, mo, np):
+def _(ChartPuck, SOLVE_URL, mo, np):
+    import sys, time
+    import asyncio
+
     n = 5
 
-    # --- Build problem ONCE ---
-    positions_param = cp.Parameter((n, 2))
-    A = cp.Variable((2, 2), PSD=True)
-    b = cp.Variable(2)
+    # ---- request helper ----
+    async def post_positions(url: str, positions: np.ndarray):
+        payload = {"positions": positions.tolist(), "max_iter": 50}
 
-    cons = [cp.norm2(A @ positions_param[j, :] + b) <= 1 for j in range(n)]
-    prob = cp.Problem(cp.Maximize(cp.log_det(A)), cons)
+        if sys.platform == "emscripten":
+            # Pyodide / browser
+            from pyodide.http import pyfetch
+            resp = await pyfetch(
+                url,
+                method="POST",
+                headers={"Content-Type": "application/json"},
+                body=mo.json.dumps(payload),
+            )
+            return await resp.json()
+        else:
+            # Local marimo run
+            import requests
+            r = requests.post(url, json=payload, timeout=10)
+            return r.json()
 
-    # Cache last successful solution so we can still draw if solve fails
-    last = {"A": None, "b": None}
+    # ---- cache + debounce ----
+    cache = {
+        "A": None,         # np.array (2,2)
+        "b": None,         # np.array (2,)
+        "lambdas": None,   # np.array (n,)
+        "in_flight": False,
+        "last_req_t": 0.0,
+        "last_error": None,
+    }
+    MIN_SECONDS_BETWEEN_SOLVES = 0.35
+
+    async def request_solve(positions: np.ndarray):
+        if cache["in_flight"]:
+            return
+        cache["in_flight"] = True
+        try:
+            data = await post_positions(SOLVE_URL, positions)
+            if data.get("ok"):
+                cache["A"] = np.array(data["A"], dtype=float)
+                cache["b"] = np.array(data["b"], dtype=float)
+                cache["lambdas"] = np.array(data["lambdas"], dtype=float)
+                cache["last_error"] = None
+            else:
+                cache["last_error"] = data.get("error", "unknown error")
+        except Exception as e:
+            cache["last_error"] = f"{type(e).__name__}: {e}"
+        finally:
+            cache["in_flight"] = False
+
+    def maybe_schedule_solve(positions: np.ndarray):
+        now = time.monotonic()
+        if now - cache["last_req_t"] < MIN_SECONDS_BETWEEN_SOLVES:
+            return
+        cache["last_req_t"] = now
+        try:
+            asyncio.create_task(request_solve(positions))
+        except RuntimeError:
+            # No event loop available; ignore (rare in marimo)
+            pass
 
     def draw_func(ax, widget):
         positions = np.array([[widget.x[i], widget.y[i]] for i in range(n)], dtype=float)
 
-        positions_param.value = positions
+        # schedule server solve (debounced)
+        maybe_schedule_solve(positions)
 
-        try:
-            prob.solve(
-                solver=cp.CLARABEL,
-                warm_start=True,     # <-- important
-                max_iter=30,         # lower in WASM to keep UI responsive
-                verbose=True,
-            )
-        except Exception:
-            pass
-
-        Ahat = A.value if A.value is not None else last["A"]
-        bhat = b.value if b.value is not None else last["b"]
-
-        if Ahat is None or bhat is None:
-            # If first solve hasn't succeeded yet, just draw points and return
-            ax.scatter(positions[:, 0], positions[:, 1], s=20, label="points")
-            ax.set_xlim(-4, 4); ax.set_ylim(-4, 4)
-            ax.grid(True, alpha=0.3)
-            return
-
-        last["A"], last["b"] = Ahat, bhat
-
-        # parameterize boundary
-        theta = np.linspace(0, 2*np.pi, 400)
-        U = np.vstack([np.cos(theta), np.sin(theta)])
-        X = np.linalg.solve(Ahat, U - bhat.reshape(2, 1))
-
+        # draw points always
         ax.scatter(positions[:, 0], positions[:, 1], s=20, label="points")
-        ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
 
-        # Duals
-        lambdas = np.array([c.dual_value for c in cons], dtype=float)
-        lambdas = np.maximum(lambdas, 0.0)
+        Ahat = cache["A"]
+        bhat = cache["b"]
+        lambdas = cache["lambdas"]
 
-        Y = (Ahat @ positions.T + bhat.reshape(2, 1))
-        Ynorm = np.linalg.norm(Y, axis=0) + 1e-12
-        N = (Ahat.T @ (Y / Ynorm))
+        if Ahat is not None and bhat is not None:
+            # boundary
+            theta = np.linspace(0, 2*np.pi, 400)
+            U = np.vstack([np.cos(theta), np.sin(theta)])
+            X = np.linalg.solve(Ahat, U - bhat.reshape(2, 1))
+            ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
 
-        lam_scaled = lambdas / np.max(lambdas) if np.max(lambdas) > 0 else lambdas
-        base = 2.0
-        Ux = -N[0, :] * (base * lam_scaled)
-        Uy = -N[1, :] * (base * lam_scaled)
+            # dual arrows
+            if lambdas is not None and len(lambdas) == n:
+                lambdas = np.maximum(lambdas, 0.0)
 
-        ax.quiver(
-            positions[:, 0], positions[:, 1],
-            Ux, Uy,
-            angles="xy", scale_units="xy", scale=1,
-            width=0.006, alpha=0.9,
-            label="dual normal force (scaled)"
-        )
+                Y = (Ahat @ positions.T + bhat.reshape(2, 1))
+                Ynorm = np.linalg.norm(Y, axis=0) + 1e-12
+                N = (Ahat.T @ (Y / Ynorm))
+
+                lam_scaled = lambdas / np.max(lambdas) if np.max(lambdas) > 0 else lambdas
+                base = 2.0
+                Ux = -N[0, :] * (base * lam_scaled)
+                Uy = -N[1, :] * (base * lam_scaled)
+
+                ax.quiver(
+                    positions[:, 0], positions[:, 1],
+                    Ux, Uy,
+                    angles="xy", scale_units="xy", scale=1,
+                    width=0.006, alpha=0.9,
+                    label="dual normal force (scaled)"
+                )
+
+        if cache["last_error"]:
+            ax.text(-3.8, 3.6, f"solve error: {cache['last_error']}", fontsize=8)
 
         ax.set_xlim(-4, 4)
         ax.set_ylim(-4, 4)
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
-        ax.set_title("Drag points to move them")
+        ax.set_title("Drag points to move them (server-solved)")
         ax.grid(True, alpha=0.3)
 
     multi_puck = ChartPuck.from_callback(
@@ -129,7 +167,7 @@ def _(ChartPuck, cp, mo, np):
         x=[-1.5] + [0] * (n-2) + [1.5],
         y=[1.5] + [-1.5] * (n-2) + [1.5],
         puck_color="red",
-        throttle=250,   # <-- bump this in WASM; 100ms is still too chatty
+        throttle=60,  # redraw often; server solve is debounced
     )
 
     multi_widget = mo.ui.anywidget(multi_puck)
