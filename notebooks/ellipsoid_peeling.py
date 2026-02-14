@@ -43,7 +43,6 @@ def _(mo):
 
 @app.cell
 def _(ChartPuck, SOLVE_URL, mo, np):
-    import sys
     import time
     import asyncio
     import json
