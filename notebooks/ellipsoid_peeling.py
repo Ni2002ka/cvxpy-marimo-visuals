@@ -43,7 +43,7 @@ def _(mo):
 
 @app.cell
 def _(ChartPuck, SOLVE_URL, mo, np):
-    import sys, time
+    import time
     import asyncio
 
     n = 5
