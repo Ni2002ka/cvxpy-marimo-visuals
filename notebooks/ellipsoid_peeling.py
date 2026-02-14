@@ -50,20 +50,19 @@ def _(ChartPuck, SOLVE_URL, mo, np):
 
     # ---- request helper ----
     async def post_positions(url: str, positions: np.ndarray):
+        import json
         payload = {"positions": positions.tolist(), "max_iter": 50}
 
         if sys.platform == "emscripten":
-            # Pyodide / browser
             from pyodide.http import pyfetch
             resp = await pyfetch(
                 url,
                 method="POST",
                 headers={"Content-Type": "application/json"},
-                body=mo.json.dumps(payload),
+                body=json.dumps(payload),
             )
             return await resp.json()
         else:
-            # Local marimo run
             import requests
             r = requests.post(url, json=payload, timeout=10)
             return r.json()
@@ -156,7 +155,7 @@ def _(ChartPuck, SOLVE_URL, mo, np):
         ax.set_ylim(-4, 4)
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
-        ax.set_title("Drag points to move them (server-solved)")
+        ax.set_title("Drag points to move them")
         ax.grid(True, alpha=0.3)
 
     multi_puck = ChartPuck.from_callback(
