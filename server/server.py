@@ -10,7 +10,7 @@ app = FastAPI()
 # Later: set this to your GitHub Pages origin (https://<user>.github.io)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://ni2002ka.github.io"],
     allow_credentials=False,
     allow_methods=["POST", "OPTIONS"],
     allow_headers=["*"],

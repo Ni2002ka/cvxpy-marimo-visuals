@@ -19,13 +19,11 @@ async def _():
     if sys.platform == "emscripten":
         import micropip
         await micropip.install("wigglystuff")
-        
-        import pyodide_js
-        await pyodide_js.loadPackage("clarabel")  # make clarabel available in-browser
-        import clarabel
 
     from wigglystuff import ChartPuck
+    SOLVE_URL = "https://cvxpy-marimo-visuals.onrender.com/solve"
     return ChartPuck, cp, mo, np
+
 
 
 @app.cell
