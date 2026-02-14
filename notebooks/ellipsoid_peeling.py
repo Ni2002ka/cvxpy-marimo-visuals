@@ -1,5 +1,5 @@
-# marimo notebook: ellipsoid peeling (server-solved, debounced + latest-wins)
-# Run: marimo run app.py
+# marimo notebook: ellipsoid peeling with convex hull
+# Run:  marimo run app.py
 
 import marimo
 
@@ -12,8 +12,8 @@ async def _():
     import marimo as mo
     import numpy as np
     import matplotlib.pyplot as plt
-    import sys
 
+    import sys
     if sys.platform == "emscripten":
         import micropip
         await micropip.install("wigglystuff")
@@ -21,31 +21,35 @@ async def _():
     from wigglystuff import ChartPuck
 
     SOLVE_URL = "https://cvxpy-marimo-visuals.onrender.com/solve"
-    return ChartPuck, SOLVE_URL, mo, np, sys
+    return ChartPuck, SOLVE_URL, mo, np
 
 
 @app.cell
 def _(mo):
     mo.md(r"""
-    # Ellipsoid peeling using dual values (server-solved)
-    Smoother UX: debounce solves + discard stale responses.
+    # Ellipsoid peeling using dual values
+    ## Minimum volume ellipsoid around a set of points
+    * Ellipsoid parametarized as $\varepsilon=\{\nu | ||A\nu +b||_2 \leq 1\}$.
+    * Finite set of points $\{x_1, x_2, ..., x_m\}$.
+    * Volume is proportional to $\det A^{-1}$, so can find $\varepsilon$ by solving the convex problem
+
+    $$
+    \text{minimize (over } A,b) \;\;\;\; \log\det A^{-1} \\
+    \text{subject to } ||Ax_i+b||_2 \leq 1, \;\;\;\; i=1,..., m
+    $$
     """)
     return
 
 
 @app.cell
-def _(ChartPuck, SOLVE_URL, mo, np, sys):
+def _(ChartPuck, SOLVE_URL, mo, np):
     import time
     import asyncio
     import json
 
     n = 5
 
-    # --------- tuning knobs ----------
-    DEBOUNCE_SECONDS = 0.45     # only solve after user stops moving for this long
-    MIN_GAP_SECONDS = 0.20      # never solve more frequently than this
-    # --------------------------------
-
+    # ---- request helper ----
     async def post_positions(url: str, positions: np.ndarray):
         payload = {"positions": positions.tolist(), "max_iter": 50}
 
@@ -60,10 +64,11 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
             return await resp.json()
         else:
             import requests
-            r = requests.post(url, json=payload, timeout=15)
+            r = requests.post(url, json=payload, timeout=10)
             return r.json()
 
     def schedule(coro):
+        """Robustly schedule an async task (Pyodide + local)."""
         try:
             asyncio.get_running_loop().create_task(coro)
             return True
@@ -74,112 +79,99 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
             except Exception:
                 return False
 
+    # ---- cache + latest-wins ----
     cache = {
-        "A": None,
-        "b": None,
-        "lambdas": None,
-        "positions_used": None,
+        "A": None,                 # np.array (2,2)
+        "b": None,                 # np.array (2,)
+        "lambdas": None,           # np.array (n,)
+        "positions_used": None,    # np.array (n,2) points used to produce A,b,lambdas
 
-        "last_error": None,
-
-        # debounce state
-        "last_positions": None,
-        "last_move_t": 0.0,
-        "last_solve_start_t": 0.0,
-
-        # latest-wins state
         "in_flight": False,
-        "req_id": 0,          # increment for each request
-        "latest_req_id": 0,   # id of latest request we care about
+        "pending_positions": None, # store the newest positions while a request is running
 
-        "last_ok_t": None,
+        "last_req_t": 0.0,
+        "last_error": None,
     }
 
-    async def request_solve(positions: np.ndarray, req_id: int):
+    # How often we allow starting a NEW request (network+solver bound)
+    MIN_SECONDS_BETWEEN_SOLVES = 0.25
+
+    async def request_solve(positions: np.ndarray):
         cache["in_flight"] = True
         try:
             data = await post_positions(SOLVE_URL, positions)
-
-            # Discard stale responses
-            if req_id != cache["latest_req_id"]:
-                return
-
             if data.get("ok"):
                 cache["A"] = np.array(data["A"], dtype=float)
                 cache["b"] = np.array(data["b"], dtype=float)
                 cache["lambdas"] = np.array(data["lambdas"], dtype=float)
                 cache["positions_used"] = positions.copy()
                 cache["last_error"] = None
-                cache["last_ok_t"] = time.monotonic()
             else:
                 cache["last_error"] = data.get("error", "unknown error")
         except Exception as e:
             cache["last_error"] = f"{type(e).__name__}: {e}"
         finally:
-            # Only clear in_flight if we're still the latest request
-            if req_id == cache["latest_req_id"]:
-                cache["in_flight"] = False
+            cache["in_flight"] = False
 
-    def maybe_debounced_solve(P_now: np.ndarray):
+            # If user moved points while we were solving, immediately solve once more
+            # (latest-wins), without spamming multiple queued requests.
+            if cache["pending_positions"] is not None:
+                P = cache["pending_positions"]
+                cache["pending_positions"] = None
+                # Start next solve right away (no debounce here; we already collapsed to latest)
+                schedule(request_solve(P))
+
+    def maybe_request(positions: np.ndarray):
         now = time.monotonic()
 
-        # track movement (treat as moved if any coordinate changed)
-        if cache["last_positions"] is None:
-            cache["last_positions"] = P_now.copy()
-            cache["last_move_t"] = now
-        else:
-            if np.max(np.abs(cache["last_positions"] - P_now)) > 1e-6:
-                cache["last_positions"] = P_now.copy()
-                cache["last_move_t"] = now
-
-        # wait until user pauses
-        paused_long_enough = (now - cache["last_move_t"]) >= DEBOUNCE_SECONDS
-        if not paused_long_enough:
+        # If a request is already running, just remember the latest positions
+        if cache["in_flight"]:
+            cache["pending_positions"] = positions.copy()
             return
 
-        # throttle
-        if now - cache["last_solve_start_t"] < MIN_GAP_SECONDS:
+        # Throttle request starts
+        if now - cache["last_req_t"] < MIN_SECONDS_BETWEEN_SOLVES:
             return
 
-        # start a new request (latest-wins)
-        cache["last_solve_start_t"] = now
-        cache["req_id"] += 1
-        cache["latest_req_id"] = cache["req_id"]
-        cache["in_flight"] = True
-        schedule(request_solve(P_now.copy(), cache["latest_req_id"]))
+        cache["last_req_t"] = now
+        ok = schedule(request_solve(positions.copy()))
+        if not ok:
+            cache["last_error"] = "Could not schedule async task (no event loop)"
 
     def draw_func(ax, widget):
-        P_now = np.array([[widget.x[i], widget.y[i]] for i in range(n)], dtype=float)
+        positions = np.array([[widget.x[i], widget.y[i]] for i in range(n)], dtype=float)
 
-        # debounce scheduling (solve only when user pauses)
-        maybe_debounced_solve(P_now)
+        # Ask server for an updated solve (throttled, latest-wins)
+        maybe_request(positions)
 
-        # draw current points always
-        ax.scatter(P_now[:, 0], P_now[:, 1], s=200, label="points")
+        # Always draw current draggable points
+        ax.scatter(positions[:, 0], positions[:, 1], s=200, label="points")
 
-        # draw last solved ellipse (may be stale while dragging)
         Ahat = cache["A"]
         bhat = cache["b"]
         lambdas = cache["lambdas"]
         P_used = cache["positions_used"]
 
+        # IMPORTANT: draw ellipse/arrows using the SAME points that produced them
+        # This removes the "messed up" mismatch/jank.
         if Ahat is not None and bhat is not None and P_used is not None:
             theta = np.linspace(0, 2*np.pi, 400)
             U = np.vstack([np.cos(theta), np.sin(theta)])
             try:
                 X = np.linalg.solve(Ahat, U - bhat.reshape(2, 1))
-                ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary (last solve)")
+                ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
             except np.linalg.LinAlgError:
+                # Rare: server returned near-singular A; just skip this frame
                 pass
 
             if lambdas is not None and len(lambdas) == n:
-                lamb = np.maximum(lambdas, 0.0)
+                lambdas2 = np.maximum(lambdas, 0.0)
 
                 Y = (Ahat @ P_used.T + bhat.reshape(2, 1))
                 Ynorm = np.linalg.norm(Y, axis=0) + 1e-12
                 N = (Ahat.T @ (Y / Ynorm))
 
-                lam_scaled = lamb / np.max(lamb) if np.max(lamb) > 0 else lamb
+                lam_scaled = lambdas2 / np.max(lambdas2) if np.max(lambdas2) > 0 else lambdas2
                 base = 2.0
                 Ux = -N[0, :] * (base * lam_scaled)
                 Uy = -N[1, :] * (base * lam_scaled)
@@ -189,34 +181,22 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
                     Ux, Uy,
                     angles="xy", scale_units="xy", scale=1,
                     width=0.006, alpha=0.9,
-                    label="dual normal force (last solve)",
+                    label="dual normal force (scaled)"
                 )
 
-        # status line
-        msg = []
-        if cache["in_flight"]:
-            msg.append("solving (server)…")
-        else:
-            msg.append("idle")
-        if cache["last_ok_t"] is None:
-            msg.append("no solve yet")
-        else:
-            msg.append(f"last solve {time.monotonic() - cache['last_ok_t']:.1f}s ago")
-        ax.text(-3.8, 3.65, " | ".join(msg), fontsize=9)
-
         if cache["last_error"]:
-            ax.text(-3.8, 3.40, f"solve error: {cache['last_error']}", fontsize=8)
+            ax.text(-3.8, 3.6, f"solve error: {cache['last_error']}", fontsize=8)
 
         ax.set_xlim(-4, 4)
         ax.set_ylim(-4, 4)
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
-        ax.set_title("Drag points to move them (server-solved, debounced)")
+        ax.set_title("Drag points to move them")
         ax.grid(True, alpha=0.3)
 
     # init points
-    x0 = [-1.5, 1.5, 0.0, 0.0, 0.6]
-    y0 = [ 1.5, 1.5, 0.0,-1.5,-0.2]
+    x0 = [-1.5] + [0] * (n - 2) + [1.5]
+    y0 = [1.5] + [-1.5] * (n - 2) + [1.5]
 
     multi_puck = ChartPuck.from_callback(
         draw_fn=draw_func,
@@ -226,15 +206,12 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
         x=x0,
         y=y0,
         puck_color="red",
-        throttle=30,  # redraw for smooth dragging; solve is debounced anyway
+        throttle=60,  # keep your original feel
     )
 
-    # kick one initial solve
+    # Kick an initial solve so ellipse appears even before you drag
     P0 = np.array(list(zip(x0, y0)), dtype=float)
-    cache["req_id"] += 1
-    cache["latest_req_id"] = cache["req_id"]
-    cache["in_flight"] = True
-    schedule(request_solve(P0, cache["latest_req_id"]))
+    schedule(request_solve(P0))
 
     multi_widget = mo.ui.anywidget(multi_puck)
     return (multi_widget,)
@@ -243,6 +220,17 @@ def _(ChartPuck, SOLVE_URL, mo, np, sys):
 @app.cell
 def _(multi_widget):
     multi_widget
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Observations:
+    * Dual corresponding to each point demonstrates how much the volume of the elliposid would shrink if we were to remove that point.
+    * If the ellipsoid were an ellastic membrane, we could think of this as a "normal force" acting on each point.
+    * The points not touching the boundary have no "force" exerted on them. Their corresponding dual is zero (complementary slackness)
+    """)
     return
 
 
