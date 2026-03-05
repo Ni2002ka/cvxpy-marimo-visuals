@@ -12,15 +12,13 @@ async def _():
     import sys
 
     # Only run this in Pyodide/WASM
-    if sys.platform != "emscripten":
-        return
+    if sys.platform == "emscripten":
 
-    import micropip
+        import micropip
 
-    # Minimal deps for this notebook in-browser
-    # NOTE: cvxpy in Pyodide is published as "cvxpy-base"
-    await micropip.install(["cvxpy-base", "clarabel", "numpy", "matplotlib", "anywidget"])
-    return
+        # Minimal deps for this notebook in-browser
+        # NOTE: cvxpy in Pyodide is published as "cvxpy-base"
+        await micropip.install(["cvxpy-base", "clarabel", "numpy", "matplotlib", "anywidget"])
 
 
 @app.cell
