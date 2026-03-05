@@ -9,19 +9,28 @@ app = marimo.App(width="full")
 
 @app.cell
 async def _():
+    import sys
+
+    # Only run this in Pyodide/WASM
+    if sys.platform != "emscripten":
+        return
+
+    import micropip
+
+    # Minimal deps for this notebook in-browser
+    # NOTE: cvxpy in Pyodide is published as "cvxpy-base"
+    await micropip.install(["cvxpy-base", "clarabel", "numpy", "matplotlib", "anywidget"])
+    return
+
+
+@app.cell
+def _():
     import marimo as mo
     import numpy as np
+    import cvxpy as cp
+    import pandas as pd
     import matplotlib.pyplot as plt
-
-    import sys
-    if sys.platform == "emscripten":
-        import micropip
-        await micropip.install("wigglystuff")
-
-    from wigglystuff import ChartPuck
-
-    SOLVE_URL = "https://cvxpy-marimo-visuals.onrender.com/solve"
-    return ChartPuck, SOLVE_URL, mo, np
+    return ChartPuck, cp, mo, np
 
 
 @app.cell
@@ -42,150 +51,62 @@ def _(mo):
 
 
 @app.cell
-def _(ChartPuck, SOLVE_URL, mo, np):
-    import time
-    import asyncio
-    import json
+def _(ChartPuck, cp, mo, np):
+    n = 7
 
-    n = 5
-
-    # ---- request helper ----
-    async def post_positions(url: str, positions: np.ndarray):
-        payload = {"positions": positions.tolist(), "max_iter": 50}
-
-        if sys.platform == "emscripten":
-            from pyodide.http import pyfetch
-            resp = await pyfetch(
-                url,
-                method="POST",
-                headers={"Content-Type": "application/json"},
-                body=json.dumps(payload),
-            )
-            return await resp.json()
-        else:
-            import requests
-            r = requests.post(url, json=payload, timeout=10)
-            return r.json()
-
-    def schedule(coro):
-        """Robustly schedule an async task (Pyodide + local)."""
-        try:
-            asyncio.get_running_loop().create_task(coro)
-            return True
-        except RuntimeError:
-            try:
-                asyncio.get_event_loop().create_task(coro)
-                return True
-            except Exception:
-                return False
-
-    # ---- cache + latest-wins ----
-    cache = {
-        "A": None,                 # np.array (2,2)
-        "b": None,                 # np.array (2,)
-        "lambdas": None,           # np.array (n,)
-        "positions_used": None,    # np.array (n,2) points used to produce A,b,lambdas
-
-        "in_flight": False,
-        "pending_positions": None, # store the newest positions while a request is running
-
-        "last_req_t": 0.0,
-        "last_error": None,
-    }
-
-    # How often we allow starting a NEW request (network+solver bound)
-    MIN_SECONDS_BETWEEN_SOLVES = 0.25
-
-    async def request_solve(positions: np.ndarray):
-        cache["in_flight"] = True
-        try:
-            data = await post_positions(SOLVE_URL, positions)
-            if data.get("ok"):
-                cache["A"] = np.array(data["A"], dtype=float)
-                cache["b"] = np.array(data["b"], dtype=float)
-                cache["lambdas"] = np.array(data["lambdas"], dtype=float)
-                cache["positions_used"] = positions.copy()
-                cache["last_error"] = None
-            else:
-                cache["last_error"] = data.get("error", "unknown error")
-        except Exception as e:
-            cache["last_error"] = f"{type(e).__name__}: {e}"
-        finally:
-            cache["in_flight"] = False
-
-            # If user moved points while we were solving, immediately solve once more
-            # (latest-wins), without spamming multiple queued requests.
-            if cache["pending_positions"] is not None:
-                P = cache["pending_positions"]
-                cache["pending_positions"] = None
-                # Start next solve right away (no debounce here; we already collapsed to latest)
-                schedule(request_solve(P))
-
-    def maybe_request(positions: np.ndarray):
-        now = time.monotonic()
-
-        # If a request is already running, just remember the latest positions
-        if cache["in_flight"]:
-            cache["pending_positions"] = positions.copy()
-            return
-
-        # Throttle request starts
-        if now - cache["last_req_t"] < MIN_SECONDS_BETWEEN_SOLVES:
-            return
-
-        cache["last_req_t"] = now
-        ok = schedule(request_solve(positions.copy()))
-        if not ok:
-            cache["last_error"] = "Could not schedule async task (no event loop)"
 
     def draw_func(ax, widget):
-        positions = np.array([[widget.x[i], widget.y[i]] for i in range(n)], dtype=float)
+        positions = np.array([[widget.x[i], widget.y[i]] for i in range(n)])
+        A = cp.Variable((2, 2), PSD=True)
+        b = cp.Variable(2)
 
-        # Ask server for an updated solve (throttled, latest-wins)
-        maybe_request(positions)
+        cons = []
+        for j in range(n):
+            cons += [cp.norm2(A @ positions[j] + b) <= 1]
 
-        # Always draw current draggable points
-        ax.scatter(positions[:, 0], positions[:, 1], s=200, label="points")
+        prob = cp.Problem(cp.Maximize(cp.log_det(A)), cons)
+        prob.solve(solver=cp.CLARABEL)
 
-        Ahat = cache["A"]
-        bhat = cache["b"]
-        lambdas = cache["lambdas"]
-        P_used = cache["positions_used"]
 
-        # IMPORTANT: draw ellipse/arrows using the SAME points that produced them
-        # This removes the "messed up" mismatch/jank.
-        if Ahat is not None and bhat is not None and P_used is not None:
-            theta = np.linspace(0, 2*np.pi, 400)
-            U = np.vstack([np.cos(theta), np.sin(theta)])
-            try:
-                X = np.linalg.solve(Ahat, U - bhat.reshape(2, 1))
-                ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
-            except np.linalg.LinAlgError:
-                # Rare: server returned near-singular A; just skip this frame
-                pass
+        Ahat = A.value
+        bhat = b.value
 
-            if lambdas is not None and len(lambdas) == n:
-                lambdas2 = np.maximum(lambdas, 0.0)
+        if Ahat is None or bhat is None:
+            raise ValueError("No values set for A or b")
 
-                Y = (Ahat @ P_used.T + bhat.reshape(2, 1))
-                Ynorm = np.linalg.norm(Y, axis=0) + 1e-12
-                N = (Ahat.T @ (Y / Ynorm))
+        # parameterize boundary
+        theta = np.linspace(0, 2*np.pi, 400)
+        U = np.vstack([np.cos(theta), np.sin(theta)])          # Pick points on unit circle
+        X = np.linalg.solve(Ahat, U - bhat.reshape(2,1))       # Find pre-image of points
 
-                lam_scaled = lambdas2 / np.max(lambdas2) if np.max(lambdas2) > 0 else lambdas2
-                base = 2.0
-                Ux = -N[0, :] * (base * lam_scaled)
-                Uy = -N[1, :] * (base * lam_scaled)
 
-                ax.quiver(
-                    P_used[:, 0], P_used[:, 1],
-                    Ux, Uy,
-                    angles="xy", scale_units="xy", scale=1,
-                    width=0.006, alpha=0.9,
-                    label="dual normal force (scaled)"
-                )
+        ax.scatter(positions[:, 0], positions[:, 1], s=20, label="points")
+        ax.plot(X[0, :], X[1, :], linewidth=2, label="ellipsoid boundary")
 
-        if cache["last_error"]:
-            ax.text(-3.8, 3.6, f"solve error: {cache['last_error']}", fontsize=8)
+        # Duals calculation
+        lambdas = np.array([c.dual_value for c in cons], dtype=float)  # shape (n,)
+        lambdas = np.maximum(lambdas, 0.0)
+
+        Y = (Ahat @ positions.T + bhat.reshape(2, 1))
+        Ynorm = np.linalg.norm(Y, axis=0) + 1e-12
+        N = (Ahat.T @ (Y / Ynorm))
+
+        if np.max(lambdas) > 0:
+            lam_scaled = lambdas / np.max(lambdas)
+        else:
+            lam_scaled = lambdas
+
+        base = 2.0
+        Ux = -N[0, :] * (base * lam_scaled)
+        Uy = -N[1, :] * (base * lam_scaled)
+
+        ax.quiver(
+            positions[:, 0], positions[:, 1],
+            Ux, Uy,
+            angles="xy", scale_units="xy", scale=1,
+            width=0.006, alpha=0.9,
+            label="dual normal force (scaled)"
+        )
 
         ax.set_xlim(-4, 4)
         ax.set_ylim(-4, 4)
@@ -194,24 +115,16 @@ def _(ChartPuck, SOLVE_URL, mo, np):
         ax.set_title("Drag points to move them")
         ax.grid(True, alpha=0.3)
 
-    # init points
-    x0 = [-1.5] + [0] * (n - 2) + [1.5]
-    y0 = [1.5] + [-1.5] * (n - 2) + [1.5]
-
     multi_puck = ChartPuck.from_callback(
         draw_fn=draw_func,
         figsize=(8, 8),
         x_bounds=(-4, 4),
         y_bounds=(-4, 4),
-        x=x0,
-        y=y0,
+        x=[-1.5] + [0] * (n-2) + [1.5],
+        y=[0] + [1.5] * (n-1),
         puck_color="red",
-        throttle=60,  # keep your original feel
+        throttle=100
     )
-
-    # Kick an initial solve so ellipse appears even before you drag
-    P0 = np.array(list(zip(x0, y0)), dtype=float)
-    schedule(request_solve(P0))
 
     multi_widget = mo.ui.anywidget(multi_puck)
     return (multi_widget,)
