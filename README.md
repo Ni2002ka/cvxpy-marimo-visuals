@@ -12,5 +12,5 @@ Here, you can find some interactive demos for HW problems as well as some additi
 
 
 ## Additional Primal/Dual Visualizations
-- [Ellipsoid Peeling](https://ni2002ka.github.io/cvxpy-marimo-visuals/ellipsoid_peeling/)
+- [Ellipsoid Peeling](https://ni2002ka.github.io/cvxpy-marimo-visuals/ellipsoid_peeling/) Note: this is currently being solved on an external server, so it takes a while to render after you move the points. Working on making it smoother
 - [Hanging Beads](https://ni2002ka.github.io/cvxpy-marimo-visuals/hanging_beads/)
