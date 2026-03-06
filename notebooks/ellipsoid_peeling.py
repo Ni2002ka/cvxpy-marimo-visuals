@@ -18,7 +18,7 @@ async def _():
 
         # Minimal deps for this notebook in-browser
         # NOTE: cvxpy in Pyodide is published as "cvxpy-base"
-        await micropip.install(["cvxpy-base", "clarabel", "numpy", "matplotlib", "anywidget"])
+        await micropip.install(["cvxpy-base", "clarabel", "numpy", "matplotlib", "anywidget", "wigglystuff"])
 
 
 @app.cell
@@ -28,7 +28,7 @@ def _():
     import cvxpy as cp
     import pandas as pd
     import matplotlib.pyplot as plt
-    from chartpuck import ChartPuck
+    from wigglystuff import ChartPuck
     return ChartPuck, cp, mo, np
 
 
