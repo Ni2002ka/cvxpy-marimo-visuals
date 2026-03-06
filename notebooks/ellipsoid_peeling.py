@@ -28,6 +28,7 @@ def _():
     import cvxpy as cp
     import pandas as pd
     import matplotlib.pyplot as plt
+    from chartpuck import ChartPuck
     return ChartPuck, cp, mo, np
 
 
